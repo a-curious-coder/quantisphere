@@ -5,8 +5,8 @@ __pycache__/
 
 # C extensions
 *.so
-innaccurate_price_reader.py/
-temp.py/
+innaccurate_price_reader.py
+temp.py
 *.DS_Store
 *.venv/
 /.venv/
