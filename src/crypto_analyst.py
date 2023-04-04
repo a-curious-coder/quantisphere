@@ -2,8 +2,7 @@
 import pandas as pd
 import numpy as np
 from keras.layers import LSTM, Dense, Dropout
-from keras.models import Sequential
-from sklearn.preprocessing import MinMaxScaler
+from keras.models import Sequential, load_model
 from plotter import Plotter
 
 
@@ -12,6 +11,28 @@ class LSTMModel:
     """
     LSTM Model Creation and Training
     """
+    def __init__(self, training_data: np.array, prediction_days: int = 3):
+        """
+        Initializes the LSTMModel class
+
+        Parameters
+        ----------
+        training_data : np.array
+            Training data for the model
+        prediction_days : int, optional
+            Number of days to predict, by default 3
+        """
+        self.training_data = training_data
+        self.prediction_days = prediction_days
+        self.scaler = None
+        # If model already exists, load it
+        try:
+            # HACK: Hardcoded path
+            self.model = load_model(f"models/lstm_model.h5")
+        # If model doesn't exist, create it
+        except OSError:
+            self.model = self.create_model(len(training_data))
+
     @staticmethod
     def create_model(data_shape: int, units: int = 50, dropout: float = 0.2) -> Sequential:
         """
@@ -42,127 +63,103 @@ class LSTMModel:
         model.add(Dense(units=1))
         return model
 
-    @staticmethod
-    def train_model(model: Sequential, x_train: np.array, y_train: np.array, crypto: str) -> Sequential:
+    def train(self, epochs: int = 25, batch_size: int = 32) -> None:
         """
         Trains the model
 
         Parameters
         ----------
-        model : Sequential
-            Model with LSTM layers and dropout
-        x_train : np.array
-            Training data for model
-        y_train : np.array
-            Training labels for model
-        crypto : str
-            Name of the cryptocurrency
-
-        Returns
-        -------
-        Sequential
-            Trained model
+        epochs : int, optional
+            Number of epochs to train for, by default 25
+        batch_size : int, optional
+            Batch size, by default 32
         """
-        # Compile model
-        model.compile(optimizer='adam', loss='mse')
-        # Train model
-        model.fit(x_train, y_train, batch_size=32, epochs=10)
-        # Save model
-        model.save(f'{crypto}_model.h5')
-        print("[INFO]\\tModel trained")
-        return model
+        self.model.compile(optimizer='adam', loss='mean_squared_error')
+        self.model.fit(self.training_data, self.training_data, epochs=epochs, batch_size=batch_size)
 
+    def save(self, model_path: str) -> None:
+        """
+        Saves the model
+
+        Parameters
+        ----------
+        model_name : str
+            Name of the model
+        """
+        self.model.save(model_path)
+
+    
 
 class CryptoAnalyst:
     """
     Crypto Analyst Class
     """
-    def __init__(self, crypto: str, prediction_days: int, x_train: np.array, y_train: np.array, x_test: np.array, y_test: np.array):
+    def __init__(self, model_name: str, crypto_data: pd.DataFrame, prediction_days: int = 3, train_pct: float = 0.8, feature_range: tuple = (0, 1), fillna: bool = False, fill_value: float = 0):
         """
         Initializes the CryptoAnalyst class
 
         Parameters
         ----------
-        crypto : str
-            Name of the cryptocurrency
-        prediction_days : int
-            Number of days to predict
-        x_train : np.array
-            Training data for model
-        y_train : np.array
-            Training labels for model
-        x_test : np.array
-            Testing data for model
-        y_test : np.array
-            Testing labels for model
+        model_name : str
+            Name of the model
+        crypto_data : pandas.DataFrame
+            Dataframe with crypto currency data
+        prediction_days : int, optional
+            Number of days to predict, by default 3
+        train_pct : float, optional
+            Percentage of data to be used for training, by default 0.8
+        feature_range : tuple, optional
+            Range for scaling data, by default (0, 1)
+        fillna : bool, optional
+            Whether or not to fill missing values, by default False
+        fill_value : float, optional
+            Value to fill missing values with, by default 0
         """
-        self.crypto = crypto
+        self.model_name = model_name
+        self.crypto_data = crypto_data
         self.prediction_days = prediction_days
-        self.train_data = x_train
-        self.train_labels = y_train
-        self.test_data = x_test
-        self.test_labels = y_test
-        self.plotter = Plotter(self.crypto, self.prediction_days)
+        self.plotter = Plotter('BTC', prediction_days=prediction_days)
+        # Plot the predicted and actual values
+        self.plotter.actual_vs_prediction(self.get_actual(), self.get_predictions())
+        self.plotter.predictions(self.get_predictions())
 
-    def run_model(self, data: pd.DataFrame, model: Sequential, scaler: MinMaxScaler) -> None:
+    def get_predictions(self, days: int = 30) -> pd.DataFrame:
         """
-        Predicts the price for the next prediction_days
+        Gets predictions for the next 30 days
 
         Parameters
         ----------
-        data : pd.DataFrame
-            Dataframe with cryptocurrency data
-        model : Sequential
-            Trained model
-        scaler : MinMaxScaler
-            Scaler for the data
+        days : int, optional
+            Number of days to predict, by default 30
+
+        Returns
+        -------
+        pandas.DataFrame
+            Dataframe with predictions
         """
-        print(f"[INFO]\\tPredicting tomorrow's price for {self.crypto}")
+        predictions = self.model.predict(self.testing_data)
+        predictions = self.model.scaler.inverse_transform(predictions)
+        predictions = pd.DataFrame(predictions, columns=['Prediction'])
+        predictions['Date'] = self.crypto_data['Date'].tail(days)
+        predictions = predictions.set_index('Date')
+        return predictions
 
-        # Get the total dataset
-        total_dataset = pd.concat((data['Close'], self.test_data['Close']), axis=0)
-
-        # Get the inputs for the model
-        model_inputs = total_dataset[len(total_dataset) - len(self.test_data) - self.prediction_days:].values
-        model_inputs = model_inputs.reshape(-1, 1)
-        model_inputs = scaler.fit_transform(model_inputs)
-
-        # Predicting next day
-        real_data = [model_inputs[len(model_inputs) + 1 - self.prediction_days: len(model_inputs) + 1, 0]]
-        real_data = np.array(real_data)
-        real_data = np.reshape(real_data, (real_data.shape[0], real_data.shape[1], 1))
-
-        # Get predictions
-        preds = model.predict(real_data)
-
-        # To get actual price values from 0-1 values
-        preds = scaler.inverse_transform(preds)
-
-        # Plot predictions
-        self.plotter.predictions(preds)
-
-        # Format final prediction
-        final = format(float(preds[0]), '.8f') if preds[0] < 0.001 else float(preds[0])
-        print(f"Tomorrow's price for {self.crypto} is £{final}")
-
-    def evaluate_model(self, model: Sequential, scaler: MinMaxScaler) -> None:
+    def get_actual(self, days: int = 30) -> pd.DataFrame:
         """
-        Evaluates the model by plotting actual and predicted prices
+        Gets actual values for the next 30 days
 
         Parameters
         ----------
-        model : Sequential
-            Trained model
-        scaler : MinMaxScaler
-            Scaler for the data
+        days : int, optional
+            Number of days to predict, by default 30
+
+        Returns
+        -------
+        pandas.DataFrame
+            Dataframe with actual values
         """
-        print("[INFO]\\tEvaluating model")
-
-        # Predict prices
-        prediction_prices = model.predict(self.test_data)
-
-        # To get actual prices values from 0-1 values
-        prediction_prices = scaler.inverse_transform(prediction_prices)
-
-        # Plot actual vs predicted prices
-        self.plotter.actual_vs_prediction(self.test_labels, prediction_prices)
+        actual = self.crypto_data['Close'].tail(days)
+        actual = pd.DataFrame(actual, columns=['Actual'])
+        actual['Date'] = self.crypto_data['Date'].tail(days)
+        actual = actual.set_index('Date')
+        return actual

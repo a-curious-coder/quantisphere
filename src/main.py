@@ -1,66 +1,79 @@
 import os
 import sys
 
-import numpy as np
-import pandas as pd
-from sklearn.preprocessing import MinMaxScaler
+# import numpy as np
+# import pandas as pd
+import warnings
+
+# from sklearn.preprocessing import MinMaxScaler
+# from sklearn.model_selection import train_test_split
 from keras.models import load_model
 from crypto_analyst import CryptoAnalyst
 from crypto_analyst import LSTMModel
 from data_collector import DataCollector
+
+# Suppress all warnings
+warnings.filterwarnings("ignore")
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 def cls():
     """ Clear the screen """
     os.system('cls' if os.name=='nt' else 'clear')
 
 
+def show_title():
+    os.system('cls' if os.name == 'nt' else 'clear')
+    print('===================================')
+    print('||          WELCOME TO            ||')
+    print('||        CRYPTO-ANALYST          ||')
+    print('||         VERSION 1.0.0          ||')
+    print('===================================')
+
+
 def main():
     """ Main function """
-    crypto = "ADA"
+    crypto = "BTC"
     prediction_days = 3
-    data_collector = DataCollector(crypto)
-
+    start_date, end_date = "15-10-2021", "15-10-2022"
+    data_collector = DataCollector(crypto, start_date, end_date)
+    
+    # We want to collect training and testing datasets for the user chosen crypto currency
+    # TODO: Validate whether the crypto-currency exists.
     cls()
-    print("Welcome to crypto-analyst")
-    data = data_collector.get_crypto_data()
+    show_title()
 
-    # Scale data between 0 and 1
-    scaler = MinMaxScaler(feature_range=(0, 1))
-    # Normalise between -1 and 1
-    scaled_data = scaler.fit_transform(data['Close'].values.reshape(-1, 1))
-    # Split data into training and testing
-    training_data = scaled_data[:int(len(scaled_data) * 0.8)]
-    testing_data = scaled_data[int(len(scaled_data) * 0.8) - 60:]
+    data_collector.prepare_train_test_datasets(data_collector.load_crypto_data())
+    # Collects crypto currency data from the API
+    training_data, testing_data = data_collector.get_train_test_data()
 
-    # Gets training data
-    x_train, y_train = data_collector.get_training_data()
+    # Create the model
+    model = LSTMModel(training_data, prediction_days)
 
-    total_dataset = pd.concat((data['Close'], testing_data), axis=0)
+    # Train the model
+    model.train()
 
-    model_inputs = total_dataset[len(total_dataset) - len(testing_data) - prediction_days:].values
-    model_inputs = model_inputs.reshape(-1, 1)
-    model_inputs = scaler.fit_transform(model_inputs)
+    # Save the model
+    model.save("models/lstm_model.h5")
 
-    # Predictions
-    x_test = [model_inputs[x - prediction_days: x, 0] for x in range(prediction_days, len(model_inputs))]
+    # Load the model
+    model = load_model("models/lstm_model.h5")
 
-    x_test = np.array(x_test)
-    x_test = np.reshape(x_test, (x_test.shape[0], x_test.shape[1], 1))
+    # Create the crypto analyst
+    crypto_analyst = CryptoAnalyst(model, testing_data, prediction_days)
 
-    crypto_analyst = CryptoAnalyst(crypto, prediction_days, x_train, y_train, x_test, testing_data)
-    mod = LSTMModel()
-    # If a trained model already exists
-    if os.path.exists(f'{crypto}_model.h5'):
-        print("[INFO]\\tLoading model")
-        model = load_model(f'{crypto}_model.h5')
-    else:
-        # Create model
-        model = mod.create_model(data_shape = x_train.shape[1])
-        # Train model
-        model = mod.train_model(model = model, x_train = x_train, y_train = y_train, crypto=crypto)
-    # Evaluate model
-    crypto_analyst.evaluate_model(model, scaler)
+    # Get the predictions
+    predictions = crypto_analyst.get_predictions()
 
+    # Get the actual values
+    actual_values = crypto_analyst.get_actual()
+
+    print("Predictions: ", predictions)
+    print("Actual Values: ", actual_values)
+
+    
+
+
+    
 
 if __name__ == '__main__':
     try:
