@@ -1,6 +1,12 @@
 # Own files
 *.h5
 .vscode
+*.pkl
+*.png
+images/
+data/
+results/
+tests/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

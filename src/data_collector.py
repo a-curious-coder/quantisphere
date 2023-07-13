@@ -1,226 +1,209 @@
 """ Data collector crypto currency data from CoinMarketCap """
 import os
-from datetime import datetime
 import numpy as np
 import pandas as pd
-
+import yfinance as yf
 from cryptocmd import CmcScraper
-from currency_converter import CurrencyConverter
+from data_preprocessor import Preprocessor
 from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_squared_error
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, LSTM
+import matplotlib.pyplot as plt
+# Import go
+import plotly.graph_objects as go
+import plotly.subplots as sp
+from sklearn.model_selection import train_test_split
+
+import tensorflow as tf
+tf.config.optimizer.set_jit(True)
+
+import joblib
+
+def load_model():
+    try:
+        model = joblib.load('model.pkl')
+        return model
+    except FileNotFoundError:
+        return None
+
+def save_model(model):
+    joblib.dump(model, 'model.pkl')
+
+def load_data(stock):
+    data_collector = DataCollector(stock=stock)
+    data = data_collector.get_stock_data()
+    return data
+
+def split_data(data):
+    train_size = int(len(data) * 0.8)
+    train_data = data.iloc[:train_size]
+    test_data = data.iloc[train_size:]
+    return train_data, test_data
+
+def scale_data(train_data):
+    scaler = MinMaxScaler()
+    scaled_train_data = scaler.fit_transform(train_data['Close'].values.reshape(-1, 1))
+    return scaler, scaled_train_data
+
+def create_input_target(train_data, n_days):
+    x_train = []
+    y_train = []
+    for i in range(n_days, len(train_data)):
+        x_train.append(train_data[i-n_days:i, 0])
+        y_train.append(train_data[i, 0])
+    return np.array(x_train), np.array(y_train)
+
+def reshape_input(x_train):
+    x_train = np.reshape(x_train, (x_train.shape[0], x_train.shape[1], 1))
+    return x_train
+
+def create_model(x_train, y_train, x_val, y_val):
+    model = Sequential()
+    model.add(LSTM(units=50, return_sequences=True, input_shape=(x_train.shape[1], 1)))
+    model.add(LSTM(units=50))
+    model.add(Dense(units=1))
+    model.compile(optimizer='adam', loss='mean_squared_error')
+    history = model.fit(x_train, y_train, validation_data=(x_val, y_val), epochs=10, batch_size=32)
+    return model, history
+
+def prepare_testing_data(data, scaler, n_days):
+    inputs = data['Close'].values[-n_days:]
+    inputs = scaler.transform(inputs.reshape(-1, 1))
+    x_test = []
+    for i in range(n_days, len(inputs) + 1):  # Include the equal sign
+        x_test.append(inputs[i-n_days:i, 0])
+    x_test = np.array(x_test)
+    x_test = np.reshape(x_test, (x_test.shape[0], x_test.shape[1], 1))
+    return x_test
 
 
+def make_predictions(model, x_test, scaler):
+    predicted_prices = model.predict(x_test)
+    predicted_prices = scaler.inverse_transform(predicted_prices)
+    return predicted_prices
+
+def plot_results(test_data, predicted_prices):
+    plt.plot(test_data['Close'].values, color='black', label='Actual Price')
+    plt.plot(predicted_prices, color='green', label='Predicted Price')
+    plt.title(f"{data_collector.symbol} Price Prediction")
+    plt.xlabel('Time')
+    plt.ylabel('Price')
+    plt.legend()
+    plt.show()
+
+def evaluate_model(test_data, predicted_prices):
+    mse = mean_squared_error(test_data['Close'], predicted_prices)
+    print("Mean Squared Error:", mse)
+    
 class DataCollector:
     """ Data collector crypto currency data from CoinMarketCap """
-    def __init__(self, crypto_currency: str, start_date = None, end_date = None, debug = False):
+    def __init__(self, crypto=None, stock=None, start_date = None, end_date = None):
         """ Initializes the DataCollector class
         Parameters
         ----------
-        crypto_currency : str
+        crypto : str
             Name of the crypto currency
         """
-        self.crypto_currency = crypto_currency
+        self.crypto = crypto
+        self.stock = stock
+        self.symbol = crypto if crypto is not None else stock
         self.start_date = start_date
         self.end_date = end_date
         if start_date is not None and end_date is not None:
-            self.date_range = True
-            self.file_name = f"{crypto_currency}_{start_date}_{end_date}.csv"
+            self.file_path = f"data/{crypto}_{start_date}_{end_date}.csv"
         else:
-            self.date_range = False
-            self.file_name = f"{crypto_currency}_all_time.csv"
-        self.crypto_data = pd.DataFrame()
-        self.training_data = None
-        self.testing_data = None
-        self.debug = debug
-        self.load_crypto_data()
-        self.prepare_train_test_datasets()
+            self.file_path = f"data/{crypto}.csv"
 
-    def validate_crypto(self) -> str:
-        # TODO: Validate crypto-currency user gives is valid
-        return
+    def download_crypto_data(self):
+        """ Download stock data using yfinance library """
+        scraper = CmcScraper(self.crypto, start_date=self.start_date, end_date=self.end_date, fiat="GBP")
+        data = scraper.get_dataframe()
+        return data
 
-    def prepare_train_test_datasets(self, train_pct: float = 0.8, feature_range: tuple = (0, 1), fillna: bool = False, fill_value: float = 0) -> (np.array, np.array):
-        """ Prepares training and testing data for the model
-        Parameters
-        ----------
-        data : pandas.DataFrame
-            Dataframe with crypto currency data
-        train_pct : float, optional
-            Percentage of data to be used for training, by default 0.8
-        feature_range : tuple, optional
-            Range for scaling data, by default (0, 1)
-        fillna : bool, optional
-            Whether or not to fill missing values, by default False
-        fill_value : float, optional
-            Value to fill missing values with, by default 0
-        Returns
-        -------
-        training_data : np.array
-            Training data for the model
-        testing_data : np.array
-            Testing data for the model
-        """
-        try:
-            # Scale data
-            scaler = MinMaxScaler(feature_range=feature_range)
-            scaled_data = scaler.fit_transform(self.crypto_data['Close'].values.reshape(-1, 1))
-            # Split data into training and testing
-            train_size = int(len(scaled_data) * train_pct)
-            self.training_data = scaled_data[:train_size]
-            self.testing_data = scaled_data[train_size:]
-        except Exception as e:
-            self._print(f"[ERROR]\t{e}")
+    def download_stock_data(self):
+        """ Download stock data using yfinance library """
+        ticker = yf.Ticker(self.stock)
+        data = ticker.history(period="max")
+        return data
 
-    def get_train_test_data(self):
-        return self.training_data, self.testing_data
-
-    def load_crypto_data(self) -> pd.DataFrame:
-        """ Get crypto currency data from CoinMarketCap
-        Returns
-        -------
-        crypto_data : pandas.DataFrame
-            Dataframe with crypto currency data
-        """
-        if os.path.exists(self.file_name):
-            self._print(f"[INFO]\tLoading \'{self.crypto_currency}\' data spanning over {self._duration_between_dates()}")
-            self.crypto_data = pd.read_csv(self.file_name)
+    def get_crypto(self):
+        """ Get stock data by calling the smaller functions """
+        if os.path.exists(f"data/{self.crypto}.csv"):
+            # If the data file already exists, load it instead of downloading
+            processed_data = pd.read_csv(f"data/{self.crypto}.csv", index_col=0)
         else:
-            if self.date_range:
-                self._print(f"[INFO]\tCollecting \'{self.crypto_currency}\' data between {self.start_date} and {self.end_date}; Spanning over {self._duration_between_dates()}")
-            else:
-                self._print(f"[INFO]\tCollecting all cryptocurrency data for \'{self.crypto_currency}\'")
-            self._get_crypto_data()
+            # If the data file does not exist, download the data
+            data = self.download_stock_data()
+            processed_data = Preprocessor.crypto(data)
+            self.save(processed_data)
 
+        return processed_data
 
-    def _get_crypto_data(self):
-        """Fetches cryptocurrency data from CoinMarketCap and saves it to a file."""
-        try:
-            # Initialise scraper which will automatically collect the given cryptocurrency's data
-            scraper = CmcScraper(self.crypto_currency, start_date=self.start_date, end_date=self.end_date)
+    def get_stock_data(self):
+        """ Get stock data by calling the smaller functions """
+        if os.path.exists(f"data/{self.stock}.csv"):
+            # If the data file already exists, load it instead of downloading
+            processed_data = pd.read_csv(f"data/{self.stock}.csv", index_col=0)
+        else:
+            # If the data file does not exist, download the data
+            data = self.download_stock_data()
+            processed_data = Preprocessor.stocks(data)
+            self.save(processed_data)
 
-            # Get the data from the scraper object as a Pandas Dataframe
-            self.crypto_data = scraper.get_dataframe()
+        return processed_data
 
-            # Filter relevant columns and convert data to GBP
-            self.crypto_data = self._filter_and_convert(self.crypto_data)
-
-            # Save data to file
-            self.crypto_data.to_csv(self.file_name, index=False)
-        except Exception as e:
-            self._print(f"[ERROR]\t{e}")
-            self.crypto_data = None
-
-    def _filter_and_convert(self, data: pd.DataFrame) -> pd.DataFrame:
-        """ Filter and convert relevant columns in the crypto currency data
-        Parameters
-        ----------
-        data : pandas.DataFrame
-            The dataframe with crypto currency data
-        Returns
-        -------
-        filtered_data : pandas.DataFrame
-            The filtered dataframe with relevant columns converted
-        """
-        # Set headers for data
-        filtered_data = pd.DataFrame(
-            data=self.crypto_data,
-            columns=[
-                'Date',
-                'High',
-                'Low',
-                'Open',
-                'Close',
-                'Volume'
-            ]
-        )
-        filtered_data['Open'] = filtered_data['Open'].apply(self.convert_to_gbp)
-        filtered_data['High'] = filtered_data['High'].apply(self.convert_to_gbp)
-        filtered_data['Low'] = filtered_data['Low'].apply(self.convert_to_gbp)
-        filtered_data['Close'] = filtered_data['Close'].apply(self.convert_to_gbp)
-        filtered_data.to_csv(self.file_name, index=False)
-        return filtered_data
-
-    def _duration_between_dates(self):
-        # TODO: Validate start date is before end date
-        d1 = datetime.strptime(self.start_date, "%d-%m-%Y")
-        d2 = datetime.strptime(self.end_date, "%d-%m-%Y")
-
-        duration = d2 - d1
-
-        years = duration.days // 365
-        months = (duration.days % 365) // 30
-        days = (duration.days % 365) % 30
-
-        duration_str = ""
-
-        if years == 1:
-            duration_str += f"{years} year"
-        elif years > 1:
-            duration_str += f"{years} years"
-
-        if months == 1:
-            if duration_str:
-                duration_str += ", "
-            duration_str += f"{months} month"
-        elif months > 1:
-            if duration_str:
-                duration_str += ", "
-            duration_str += f"{months} months"
-
-        if days == 1:
-            if duration_str:
-                duration_str += " and "
-            duration_str += f"{days} day"
-        elif days > 1:
-            if duration_str:
-                duration_str += " and "
-            duration_str += f"{days} days"
-
-        return duration_str
-        
-    @staticmethod
-    def convert_to_gbp(value: float) -> float:
-        """ Convert crypto currency value to GBP
-        Parameters
-        ----------
-        value : float
-            Crypto currency value
-        Returns
-        -------
-        value : float
-            Crypto currency value in GBP
-        """
-        # NOTE: This function is here because the data collected from the API is in USD
-        converter = CurrencyConverter()
-        # Convert to GBP
-        value = converter.convert(float(value), 'USD', 'GBP')
-        return value
-
-    # Create overload print function using debug flag
-    def _print(self, *args, **kwargs):
-        if self.debug:
-            print(*args, **kwargs)
-
-def show_title():
-    os.system('cls' if os.name == 'nt' else 'clear')
-    print('===================================')
-    print('||          WELCOME TO            ||')
-    print('||        CRYPTO-ANALYST          ||')
-    print('||       [DATA COLLECTOR]         ||')
-    print('||         VERSION 1.0.0          ||')
-    print('===================================')
+    def save(self, data):
+        """ Save the preprocessed stock data to a file """
+        data.to_csv(f"data/{self.symbol}.csv")
 
 
 def main():
-    show_title()
-    start_date, end_date = "15-10-2021", "15-10-2022"
-    # Initialize data collector
-    data_collector = DataCollector("BTC", start_date, end_date, debug=True)
+    """ Main function """
+    n_days = 90
+    model = load_model()
+    data = load_data(stock="MAT")
+    train_data, test_data = split_data(data)
+    scaler, scaled_train_data = scale_data(train_data)
+    x_train, y_train = create_input_target(scaled_train_data, n_days)
+    x_train = reshape_input(x_train)
+    # Split the training data into training and validation sets
+    x_train, x_val, y_train, y_val = train_test_split(x_train, y_train, test_size=0.2, shuffle=False)
+    if model is None:
+        model, history = create_model(x_train, y_train, x_val, y_val)  # Modify this line
+        save_model(model)
+    else:
+        print("Model loaded from storage.")
 
-    # Fetch training and test sets
-    training_data, testing_data = data_collector.get_train_test_data()
+    x_test = prepare_testing_data(data, scaler, n_days)
+    predicted_prices = make_predictions(model, x_test, scaler)
 
-    # Print results
-    print(f"[INFO]\t[{training_data.shape[0]} | {testing_data.shape[0]}]")
+    # Filter test data to last n days
+    test_data = test_data[-n_days:]
+    
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(x=test_data.index, y=test_data['Close'], mode='lines', name='Actual Price'))
+    fig.add_trace(go.Scatter(x=test_data.index, y=predicted_prices, mode='markers', name='Predicted Price', marker=dict(color='green', size=30, symbol='x')))
+
+
+    fig.update_traces(marker=dict(color='green', size=10, symbol='circle'), selector=dict(name='Predicted Price'))
+    fig.update_traces(line=dict(color='yellow', width=1, dash='dot'), selector=dict(name='_line'))
+
+    fig.update_yaxes(range=[min(test_data['Close']) * 0.8, max(test_data['Close']) * 1.2])
+    fig.update_layout(showlegend=False)
+    fig.update_yaxes(tickvals=fig.layout.yaxis.tickvals, tickmode='array', ticktext=fig.layout.yaxis.ticktext, tickangle=0)
+    fig.update_xaxes(range=[test_data.index[0], test_data.index[-1]])
+    fig.update_layout(template='plotly_dark')
+    fig.update_layout(height=1080, width=1920)
+    fig.update_layout(title=f"MAT Price Prediction", xaxis_title='Time', yaxis_title='Price')
+
+    import plotly.io as pio
+    # Save the plot as png
+    pio.write_image(fig, "images/MAT2.png")
+
+    # Evaluate the model
+    # evaluate_model(test_data, predicted_prices)
 
 
 if __name__ == "__main__":

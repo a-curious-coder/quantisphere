@@ -3,8 +3,6 @@ import pandas as pd
 import numpy as np
 from keras.layers import LSTM, Dense, Dropout
 from keras.models import Sequential, load_model
-from plotter import Plotter
-
 
 # Extract Class: LSTM Model Creation and Training
 class LSTMModel:
@@ -88,7 +86,6 @@ class LSTMModel:
         """
         self.model.save(model_path)
 
-    
 
 class CryptoAnalyst:
     """
