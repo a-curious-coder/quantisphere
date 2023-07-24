@@ -1,26 +1,30 @@
 """ Data collector crypto currency data from CoinMarketCap """
 import os
-import numpy as np
-import pandas as pd
-import yfinance as yf
-from cryptocmd import CmcScraper
-from data_preprocessor import Preprocessor
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import mean_squared_error
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, LSTM
-import matplotlib.pyplot as plt
-# Import go
-import plotly.graph_objects as go
-import plotly.subplots as sp
-from sklearn.model_selection import train_test_split
-
-import tensorflow as tf
-tf.config.optimizer.set_jit(True)
+import warnings
+from datetime import datetime, timedelta
 
 import joblib
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+import plotly.io as pio
+import yfinance as yf
+from cryptocmd import CmcScraper
+from pyautogui import size as pyautogui_size
+from sklearn.metrics import mean_squared_error
+from sklearn.model_selection import train_test_split
+
+from data_preprocessor import Preprocessor
+from utils import clear_and_show_title, ensure_folders_exist
+
+# Suppress all warnings
+warnings.filterwarnings("ignore")
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
 
 def load_model():
+    """ Loads the model """
     try:
         model = joblib.load('model.pkl')
         return model
@@ -28,25 +32,36 @@ def load_model():
         return None
 
 def save_model(model):
+    """ Saves the model """
     joblib.dump(model, 'model.pkl')
 
 def load_data(stock):
+    """ Loads the data """
     data_collector = DataCollector(stock=stock)
     data = data_collector.get_stock_data()
     return data
 
-def split_data(data):
-    train_size = int(len(data) * 0.8)
+def preprocess_data(data):
+    """ Preprocesses all data """
+    preprocessor = Preprocessor()
+    scaler, data = preprocessor.scale_data(data)
+    # Transform Date column to index
+    data.set_index('Date', inplace=True)
+    # Filter data to only include the Date and Close column
+    data = data[['Close']]
+    return scaler, data
+
+def split_data(data, train_size = 0.8):
+    """ Splits the data into training and testing data """
+    train_size = int(len(data) * train_size)
     train_data = data.iloc[:train_size]
     test_data = data.iloc[train_size:]
     return train_data, test_data
 
-def scale_data(train_data):
-    scaler = MinMaxScaler()
-    scaled_train_data = scaler.fit_transform(train_data['Close'].values.reshape(-1, 1))
-    return scaler, scaled_train_data
-
 def create_input_target(train_data, n_days):
+    """ Creates the input and target data 
+    NOTE: n_days is used as the pattern to forecast the n_days+1 day price
+    """
     x_train = []
     y_train = []
     for i in range(n_days, len(train_data)):
@@ -59,6 +74,10 @@ def reshape_input(x_train):
     return x_train
 
 def create_model(x_train, y_train, x_val, y_val):
+    """ Creates and trains the model """
+    from tensorflow.keras.layers import LSTM, Dense
+    from tensorflow.keras.models import Sequential
+
     model = Sequential()
     model.add(LSTM(units=50, return_sequences=True, input_shape=(x_train.shape[1], 1)))
     model.add(LSTM(units=50))
@@ -67,18 +86,19 @@ def create_model(x_train, y_train, x_val, y_val):
     history = model.fit(x_train, y_train, validation_data=(x_val, y_val), epochs=10, batch_size=32)
     return model, history
 
-def prepare_testing_data(data, scaler, n_days):
+def prepare_testing_data(data, n_days):
+    """ Prepares the testing data """
     inputs = data['Close'].values[-n_days:]
-    inputs = scaler.transform(inputs.reshape(-1, 1))
     x_test = []
     for i in range(n_days, len(inputs) + 1):  # Include the equal sign
-        x_test.append(inputs[i-n_days:i, 0])
+        x_test.append(inputs[i-n_days:i])
     x_test = np.array(x_test)
     x_test = np.reshape(x_test, (x_test.shape[0], x_test.shape[1], 1))
     return x_test
 
 
 def make_predictions(model, x_test, scaler):
+    # Makes prediction and restores the original scale
     predicted_prices = model.predict(x_test)
     predicted_prices = scaler.inverse_transform(predicted_prices)
     return predicted_prices
@@ -95,7 +115,7 @@ def plot_results(test_data, predicted_prices):
 def evaluate_model(test_data, predicted_prices):
     mse = mean_squared_error(test_data['Close'], predicted_prices)
     print("Mean Squared Error:", mse)
-    
+
 class DataCollector:
     """ Data collector crypto currency data from CoinMarketCap """
     def __init__(self, crypto=None, stock=None, start_date = None, end_date = None):
@@ -131,7 +151,7 @@ class DataCollector:
         """ Get stock data by calling the smaller functions """
         if os.path.exists(f"data/{self.crypto}.csv"):
             # If the data file already exists, load it instead of downloading
-            processed_data = pd.read_csv(f"data/{self.crypto}.csv", index_col=0)
+            processed_data = pd.read_csv(f"data/{self.crypto}.csv")
         else:
             # If the data file does not exist, download the data
             data = self.download_stock_data()
@@ -144,7 +164,7 @@ class DataCollector:
         """ Get stock data by calling the smaller functions """
         if os.path.exists(f"data/{self.stock}.csv"):
             # If the data file already exists, load it instead of downloading
-            processed_data = pd.read_csv(f"data/{self.stock}.csv", index_col=0)
+            processed_data = pd.read_csv(f"data/{self.stock}.csv")
         else:
             # If the data file does not exist, download the data
             data = self.download_stock_data()
@@ -160,51 +180,83 @@ class DataCollector:
 
 def main():
     """ Main function """
-    n_days = 90
+    clear_and_show_title()
+    validation_size = 0.2
+    placeholder_symbol = "MAT"
+    train_n_days = 90
     model = load_model()
     data = load_data(stock="MAT")
-    train_data, test_data = split_data(data)
-    scaler, scaled_train_data = scale_data(train_data)
-    x_train, y_train = create_input_target(scaled_train_data, n_days)
-    x_train = reshape_input(x_train)
-    # Split the training data into training and validation sets
-    x_train, x_val, y_train, y_val = train_test_split(x_train, y_train, test_size=0.2, shuffle=False)
+    # NOTE: Scaled all data; we will save for rescaling later
+    scaler, scaled_data = preprocess_data(data)
+    train_data, test_data = split_data(scaled_data)
+
     if model is None:
-        model, history = create_model(x_train, y_train, x_val, y_val)  # Modify this line
+        x_train, y_train = create_input_target(train_data, train_n_days)
+        x_train = reshape_input(x_train)
+        # NOTE: We will use the last 20% of the training data as validation data
+        x_train, x_val, y_train, y_val = train_test_split(x_train, y_train, test_size=validation_size, shuffle=False)
+        model, _ = create_model(x_train, y_train, x_val, y_val)  # Modify this line
         save_model(model)
     else:
-        print("Model loaded from storage.")
+        print("[INFO]\tModel loaded from storage.")
 
-    x_test = prepare_testing_data(data, scaler, n_days)
+    x_test = prepare_testing_data(data, train_n_days)
     predicted_prices = make_predictions(model, x_test, scaler)
-
+    # Create a dataframe containing two columns. One column with price and the other column stating whether the price is actual or predicted then merge into a single dataframe
     # Filter test data to last n days
-    test_data = test_data[-n_days:]
+    test_data = test_data[-30:]
+    # Create a new column indicating whether the price is actual or predicted
+    test_data['Type'] = 'Actual'
     
+    # Get latest date from test data
+    today = test_data['Date'].iloc[-1]
+    # get the next day in dd/mm/yyyy format
+    today = datetime.strptime(today, '%d/%m/%Y') + timedelta(days=1)
+    future_day = today.strftime('%d/%m/%Y')
+    
+    # Add predicted prices as new row to test data for next day (i.e. the day after the last day of the test data)
+    test_data = test_data.append({'Date': future_day, 'Close': predicted_prices[0][0], 'Type': 'Predicted'}, ignore_index=True)
+    test_data.to_csv("results/test_data.csv", index=False)
+    print(test_data.tail())
+
+
+    # Assuming you have the data in a pandas DataFrame called 'data'
     fig = go.Figure()
 
-    fig.add_trace(go.Scatter(x=test_data.index, y=test_data['Close'], mode='lines', name='Actual Price'))
-    fig.add_trace(go.Scatter(x=test_data.index, y=predicted_prices, mode='markers', name='Predicted Price', marker=dict(color='green', size=30, symbol='x')))
+    # filter data to only include actual closing price and predicted closing price
+    predicted_data = test_data[test_data['Type'] != 'Actual']
+    actual_data = test_data[test_data['Type'] != 'Predicted']
+    # Add the actual closing price
+    fig.add_trace(go.Scatter(x=actual_data['Date'], y=actual_data['Close'], name='Actual Closing Price'))
 
+    # thickens the lines and change marker size
+    fig.update_traces(line=dict(width=2), marker=dict(size=5))
+    
+    # Add the predicted closing price
+    fig.add_trace(go.Scatter(x=predicted_data['Date'], y=predicted_data['Close'], name='Predicted Closing Price'))
 
-    fig.update_traces(marker=dict(color='green', size=10, symbol='circle'), selector=dict(name='Predicted Price'))
-    fig.update_traces(line=dict(color='yellow', width=1, dash='dot'), selector=dict(name='_line'))
+    # Get this screen size
+    screen_size = pyautogui_size()
+    # Customize the layout
+    fig.update_layout(
+        title='Stock Price Prediction',
+        xaxis_title='Date',
+        yaxis_title='Closing Price',
+        template='plotly_dark',
+        # size is this screen size
+        width=screen_size[0],
+        height=screen_size[1]
+    )
+    # change marker symbol and colour and size
+    fig.update_traces(mode='markers+lines', marker=dict(symbol='diamond-open', color='white', size=10))
+    # Save plot to png
+    pio.write_image(fig, "images/MAT.png")
 
-    fig.update_yaxes(range=[min(test_data['Close']) * 0.8, max(test_data['Close']) * 1.2])
-    fig.update_layout(showlegend=False)
-    fig.update_yaxes(tickvals=fig.layout.yaxis.tickvals, tickmode='array', ticktext=fig.layout.yaxis.ticktext, tickangle=0)
-    fig.update_xaxes(range=[test_data.index[0], test_data.index[-1]])
-    fig.update_layout(template='plotly_dark')
-    fig.update_layout(height=1080, width=1920)
-    fig.update_layout(title=f"MAT Price Prediction", xaxis_title='Time', yaxis_title='Price')
-
-    import plotly.io as pio
-    # Save the plot as png
-    pio.write_image(fig, "images/MAT2.png")
 
     # Evaluate the model
     # evaluate_model(test_data, predicted_prices)
 
 
 if __name__ == "__main__":
+    ensure_folders_exist()
     main()

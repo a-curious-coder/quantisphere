@@ -10,19 +10,10 @@ def clear_and_show_title():
     print('||         VERSION 1.0.0          ||')
     print('===================================')
 
-    def convert_to_gbp(value: float) -> float:
-        """ Convert crypto currency value to GBP
-        Parameters
-        ----------
-        value : float
-            Crypto currency value
-        Returns
-        -------
-        value : float
-            Crypto currency value in GBP
-        """
-        # NOTE: This function is here because the data collected from the API is in USD
-        converter = CurrencyConverter()
-        # Convert to GBP
-        value = converter.convert(float(value), 'USD', 'GBP')
-        return value
+# Create a function that ensures specific folders exist
+def ensure_folders_exist():
+    """ Ensures that the data, models, predictions, results and logs folders exist """
+    folders = ['images', 'data', 'models', 'predictions', 'results', 'logs']
+    for folder in folders:
+        if not os.path.exists(folder):
+            os.makedirs(folder)

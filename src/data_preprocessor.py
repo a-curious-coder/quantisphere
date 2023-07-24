@@ -1,6 +1,8 @@
 """ This module preprocesses the data """
 from datetime import datetime
 
+from sklearn.preprocessing import MinMaxScaler
+
 
 class Preprocessor:
     """ Preprocesses the data """
@@ -33,3 +35,9 @@ class Preprocessor:
         # Drop Dividends and Stock Splits columns
         data.drop(columns=['Dividends', 'Stock Splits', 'Volume'], inplace=True)
         return data
+
+    def scale_data(self, data):
+        """ Scales the data """
+        scaler = MinMaxScaler()
+        data['Close'] = scaler.fit_transform(data['Close'].values.reshape(-1, 1))
+        return scaler, data
