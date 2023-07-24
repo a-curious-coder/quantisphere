@@ -1,4 +1,5 @@
 """ Data collector crypto currency data from CoinMarketCap """
+from dataclasses import dataclass
 import os
 import warnings
 from datetime import datetime, timedelta
@@ -14,42 +15,81 @@ from cryptocmd import CmcScraper
 from pyautogui import size as pyautogui_size
 from sklearn.metrics import mean_squared_error
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler
 
-from data_preprocessor import Preprocessor
+from data_preprocessor import DataPreprocessor
 from utils import clear_and_show_title, ensure_folders_exist
 
 # Suppress all warnings
 warnings.filterwarnings("ignore")
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
+asset_type = "stock"
+placeholder_symbol = "MAT"
+validation_size = 0.2
+train_n_days = 90
 
-def load_model():
-    """ Loads the model """
-    try:
-        model = joblib.load('model.pkl')
-        return model
-    except FileNotFoundError:
-        return None
+@dataclass
+class IncorrectModelTypeError(Exception):
+    """ Raised when the data type entered is incorrect """
+    model_type: str
+    
+    def __str__(self) -> str:
+        return f"{self.model_type} is an incorrect model type; A model is either a 'LSTM' or 'GRU'."
 
-def save_model(model):
-    """ Saves the model """
-    joblib.dump(model, 'model.pkl')
 
-def load_data(stock):
-    """ Loads the data """
-    data_collector = DataCollector(stock=stock)
-    data = data_collector.get_stock_data()
-    return data
+class ModelHandler:
+    model_name = 'model.pkl'
+    valid_model_types = ["LSTM", "GRU"]
 
-def preprocess_data(data):
+    def __init__(self, data: pd.DataFrame, model_type: str = "LSTM"):
+        if model_type not in valid_model_types:
+            raise IncorrectModelTypeError(model_type)
+        self.model_type = model_type
+
+    def create_model(x_train, y_train, x_val, y_val):
+        """ Creates and trains the model """
+        from tensorflow.keras.layers import LSTM, Dense
+        from tensorflow.keras.models import Sequential
+
+        model = Sequential()
+        model.add(LSTM(units=50, return_sequences=True, input_shape=(x_train.shape[1], 1)))
+        model.add(LSTM(units=50))
+        model.add(Dense(units=1))
+        model.compile(optimizer='adam', loss='mean_squared_error')
+        history = model.fit(x_train, y_train, validation_data=(x_val, y_val), epochs=10, batch_size=32)
+        return model, history
+
+    def test_model(self, model, x_test):
+        # Makes prediction and restores the original scale
+        predicted_prices = model.predict(x_test)
+        return predicted_prices
+
+    def evaluate_model(self, test_data, predicted_prices):
+        mse = mean_squared_error(test_data['Close'], predicted_prices)
+        print("Mean Squared Error:", mse)
+        
+    def load_model(self) -> object:
+        """ Loads the model """
+        try:
+            self.model = joblib.load(self.model_name)
+        except FileNotFoundError:
+            return None
+        return self.model
+
+    def save_model(self):
+        """ Saves the model """
+        joblib.dump(self.model, self.model_name)
+
+def preprocess_data(data) -> tuple[MinMaxScaler, pd.DataFrame]:
     """ Preprocesses all data """
-    preprocessor = Preprocessor()
+    preprocessor = DataPreprocessor()
     scaler, data = preprocessor.scale_data(data)
     # Transform Date column to index
     data.set_index('Date', inplace=True)
     # Filter data to only include the Date and Close column
     data = data[['Close']]
-    return scaler, data
+    return (scaler, data)
 
 def split_data(data, train_size = 0.8):
     """ Splits the data into training and testing data """
@@ -73,19 +113,6 @@ def reshape_input(x_train):
     x_train = np.reshape(x_train, (x_train.shape[0], x_train.shape[1], 1))
     return x_train
 
-def create_model(x_train, y_train, x_val, y_val):
-    """ Creates and trains the model """
-    from tensorflow.keras.layers import LSTM, Dense
-    from tensorflow.keras.models import Sequential
-
-    model = Sequential()
-    model.add(LSTM(units=50, return_sequences=True, input_shape=(x_train.shape[1], 1)))
-    model.add(LSTM(units=50))
-    model.add(Dense(units=1))
-    model.compile(optimizer='adam', loss='mean_squared_error')
-    history = model.fit(x_train, y_train, validation_data=(x_val, y_val), epochs=10, batch_size=32)
-    return model, history
-
 def prepare_testing_data(data, n_days):
     """ Prepares the testing data """
     inputs = data['Close'].values[-n_days:]
@@ -96,112 +123,102 @@ def prepare_testing_data(data, n_days):
     x_test = np.reshape(x_test, (x_test.shape[0], x_test.shape[1], 1))
     return x_test
 
-
-def make_predictions(model, x_test, scaler):
-    # Makes prediction and restores the original scale
-    predicted_prices = model.predict(x_test)
-    predicted_prices = scaler.inverse_transform(predicted_prices)
-    return predicted_prices
-
 def plot_results(test_data, predicted_prices):
     plt.plot(test_data['Close'].values, color='black', label='Actual Price')
     plt.plot(predicted_prices, color='green', label='Predicted Price')
-    plt.title(f"{data_collector.symbol} Price Prediction")
+    plt.title(f"{placeholder_symbol} Price Prediction")
     plt.xlabel('Time')
     plt.ylabel('Price')
     plt.legend()
     plt.show()
 
-def evaluate_model(test_data, predicted_prices):
-    mse = mean_squared_error(test_data['Close'], predicted_prices)
-    print("Mean Squared Error:", mse)
+
+
+@dataclass
+class IncorrectAssetTypeError(Exception):
+    """ Raised when the data type entered is incorrect """
+    asset_type: str
+    
+    def __str__(self) -> str:
+        return f"{self.asset_type} is an incorrect asset type; An asset is either a 'stock' or 'crypto'."
 
 class DataCollector:
     """ Data collector crypto currency data from CoinMarketCap """
-    def __init__(self, crypto=None, stock=None, start_date = None, end_date = None):
+    valid_asset_types = ["crypto", "stock"]
+    def __init__(self, asset_type: str, symbol: str):
         """ Initializes the DataCollector class
         Parameters
         ----------
         crypto : str
             Name of the crypto currency
         """
-        self.crypto = crypto
-        self.stock = stock
-        self.symbol = crypto if crypto is not None else stock
-        self.start_date = start_date
-        self.end_date = end_date
-        if start_date is not None and end_date is not None:
-            self.file_path = f"data/{crypto}_{start_date}_{end_date}.csv"
-        else:
-            self.file_path = f"data/{crypto}.csv"
+        if asset_type not in self.valid_asset_types:
+            raise IncorrectAssetTypeError(asset_type)
+        self.symbol = symbol
+        self.file_path = f"data/{symbol}.csv"
 
-    def download_crypto_data(self):
+    def download_crypto_data(self) -> pd.DataFrame:
         """ Download stock data using yfinance library """
         scraper = CmcScraper(self.crypto, start_date=self.start_date, end_date=self.end_date, fiat="GBP")
         data = scraper.get_dataframe()
-        return data
+        processed_data = DataPreprocessor.crypto(data)
+        self.save(processed_data)
 
     def download_stock_data(self):
         """ Download stock data using yfinance library """
         ticker = yf.Ticker(self.stock)
         data = ticker.history(period="max")
+        processed_data = DataPreprocessor.stocks(data)
+        self.save(processed_data)
+
+    def download_data(self):
+        if(self.asset_type == "crypto"):
+            self.download_crypto_data()
+        elif(self.asset_type == "stock"):
+            self.download_stock_data()
+
+    def get_data(self) -> pd.DataFrame:
+        data_exists = os.path.exists(self.file_path)
+        if not data_exists:
+            self.download_data()
+
+        data = pd.read_csv(self.file_path)
+
         return data
-
-    def get_crypto(self):
-        """ Get stock data by calling the smaller functions """
-        if os.path.exists(f"data/{self.crypto}.csv"):
-            # If the data file already exists, load it instead of downloading
-            processed_data = pd.read_csv(f"data/{self.crypto}.csv")
-        else:
-            # If the data file does not exist, download the data
-            data = self.download_stock_data()
-            processed_data = Preprocessor.crypto(data)
-            self.save(processed_data)
-
-        return processed_data
-
-    def get_stock_data(self):
-        """ Get stock data by calling the smaller functions """
-        if os.path.exists(f"data/{self.stock}.csv"):
-            # If the data file already exists, load it instead of downloading
-            processed_data = pd.read_csv(f"data/{self.stock}.csv")
-        else:
-            # If the data file does not exist, download the data
-            data = self.download_stock_data()
-            processed_data = Preprocessor.stocks(data)
-            self.save(processed_data)
-
-        return processed_data
 
     def save(self, data):
         """ Save the preprocessed stock data to a file """
-        data.to_csv(f"data/{self.symbol}.csv")
+        data.to_csv(self.file_path)
 
 
 def main():
     """ Main function """
     clear_and_show_title()
-    validation_size = 0.2
-    placeholder_symbol = "MAT"
-    train_n_days = 90
-    model = load_model()
-    data = load_data(stock="MAT")
-    # NOTE: Scaled all data; we will save for rescaling later
-    scaler, scaled_data = preprocess_data(data)
-    train_data, test_data = split_data(scaled_data)
+    collector = DataCollector(asset_type, placeholder_symbol)
+    data = collector.get_data()
+    
+    preprocessor = DataPreprocessor(asset_type, data)
+    preprocessor.run()
+    data = preprocessor.get_data()
+    
+    train_data, test_data = split_data(data)
+    
+    handler = ModelHandler(data)
+    model = handler.load_model()
+    
 
     if model is None:
         x_train, y_train = create_input_target(train_data, train_n_days)
         x_train = reshape_input(x_train)
         # NOTE: We will use the last 20% of the training data as validation data
         x_train, x_val, y_train, y_val = train_test_split(x_train, y_train, test_size=validation_size, shuffle=False)
-        model, _ = create_model(x_train, y_train, x_val, y_val)  # Modify this line
-        save_model(model)
+        model, _ = handler.create_model(x_train, y_train, x_val, y_val)  # Modify this line
+        handler.save_model(model)
     else:
         print("[INFO]\tModel loaded from storage.")
 
     x_test = prepare_testing_data(data, train_n_days)
-    predicted_prices = make_predictions(model, x_test, scaler)
+    predicted_prices = handler.test_model(model, x_test)
     # Create a dataframe containing two columns. One column with price and the other column stating whether the price is actual or predicted then merge into a single dataframe
     # Filter test data to last n days
     test_data = test_data[-30:]
@@ -217,6 +234,7 @@ def main():
     # Add predicted prices as new row to test data for next day (i.e. the day after the last day of the test data)
     test_data = test_data.append({'Date': future_day, 'Close': predicted_prices[0][0], 'Type': 'Predicted'}, ignore_index=True)
     test_data.to_csv("results/test_data.csv", index=False)
+    test_data = preprocessor.rescale(test_data)
     print(test_data.tail())
 
 

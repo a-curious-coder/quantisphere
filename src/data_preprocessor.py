@@ -1,11 +1,26 @@
 """ This module preprocesses the data """
+import pandas as pd
 from datetime import datetime
-
 from sklearn.preprocessing import MinMaxScaler
 
 
-class Preprocessor:
+class DataPreprocessor:
     """ Preprocesses the data """
+    scaler = MinMaxScaler()
+    def __init__(self, asset_type: str, data: pd.DataFrame) -> None:
+        self.asset_type = asset_type
+        self.data = data
+
+    def run(self):
+        """ Runs the data preprocessor """
+        if self.asset_type == 'crypto':
+            self.crypto(self.data)
+        elif self.asset_type == 'stocks':
+            self.stocks(self.data)
+        else:
+            raise ValueError('Invalid asset type')
+        self.scale_data()
+
     @staticmethod
     def crypto(data):
         """ Preprocesses the crypto data """
@@ -36,8 +51,16 @@ class Preprocessor:
         data.drop(columns=['Dividends', 'Stock Splits', 'Volume'], inplace=True)
         return data
 
-    def scale_data(self, data):
+    def scale_data(self):
         """ Scales the data """
-        scaler = MinMaxScaler()
-        data['Close'] = scaler.fit_transform(data['Close'].values.reshape(-1, 1))
-        return scaler, data
+        self.data['Close'] = self.scaler.fit_transform(self.data['Close'].values.reshape(-1, 1))
+        return self.data
+
+    def rescale(self, data):
+        """ Rescales the data """
+        data['Close'] = self.scaler.inverse_transform(data['Close'].values.reshape(-1, 1))
+        return data
+
+    def get_data(self):
+        """ Returns the scaled data """
+        return self.data
