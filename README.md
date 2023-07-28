@@ -1,4 +1,4 @@
-# Crypto Analyst
+# Quantisphere
 Price data is scraped from CoinMarketCap, processed and used to predict the future price of a user-specified crypto currency over a set number of days. This project uses Deep Learning, incorporating LSTM layers in the neural network to best analyse and predict new prices according to the time series price data.
 
 ![Image](media/crypto_landscape.jpg)

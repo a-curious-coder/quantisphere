@@ -1,14 +1,16 @@
 """ Crypto Analyst"""
-import pandas as pd
 import numpy as np
+import pandas as pd
 from keras.layers import LSTM, Dense, Dropout
 from keras.models import Sequential, load_model
+
 
 # Extract Class: LSTM Model Creation and Training
 class LSTMModel:
     """
     LSTM Model Creation and Training
     """
+
     def __init__(self, training_data: np.array, prediction_days: int = 3):
         """
         Initializes the LSTMModel class
@@ -32,7 +34,9 @@ class LSTMModel:
             self.model = self.create_model(len(training_data))
 
     @staticmethod
-    def create_model(data_shape: int, units: int = 50, dropout: float = 0.2) -> Sequential:
+    def create_model(
+        data_shape: int, units: int = 50, dropout: float = 0.2
+    ) -> Sequential:
         """
         Creates a neural network with LSTM layers and dropout
 
@@ -53,7 +57,7 @@ class LSTMModel:
         model = Sequential()
         # LSTM layers - recurrent layers to memorise stuff from each day - specialised on this sort of data - units = nodes
         model.add(LSTM(units=units, return_sequences=True, input_shape=(data_shape, 1)))
-        model.add(Dropout(dropout)) # Prevent overfitting
+        model.add(Dropout(dropout))  # Prevent overfitting
         model.add(LSTM(units=units, return_sequences=True))
         model.add(Dropout(dropout))
         model.add(LSTM(units=units))
@@ -72,8 +76,10 @@ class LSTMModel:
         batch_size : int, optional
             Batch size, by default 32
         """
-        self.model.compile(optimizer='adam', loss='mean_squared_error')
-        self.model.fit(self.training_data, self.training_data, epochs=epochs, batch_size=batch_size)
+        self.model.compile(optimizer="adam", loss="mean_squared_error")
+        self.model.fit(
+            self.training_data, self.training_data, epochs=epochs, batch_size=batch_size
+        )
 
     def save(self, model_path: str) -> None:
         """
@@ -91,7 +97,17 @@ class CryptoAnalyst:
     """
     Crypto Analyst Class
     """
-    def __init__(self, model_name: str, crypto_data: pd.DataFrame, prediction_days: int = 3, train_pct: float = 0.8, feature_range: tuple = (0, 1), fillna: bool = False, fill_value: float = 0):
+
+    def __init__(
+        self,
+        model_name: str,
+        crypto_data: pd.DataFrame,
+        prediction_days: int = 3,
+        train_pct: float = 0.8,
+        feature_range: tuple = (0, 1),
+        fillna: bool = False,
+        fill_value: float = 0,
+    ):
         """
         Initializes the CryptoAnalyst class
 
@@ -115,7 +131,7 @@ class CryptoAnalyst:
         self.model_name = model_name
         self.crypto_data = crypto_data
         self.prediction_days = prediction_days
-        self.plotter = Plotter('BTC', prediction_days=prediction_days)
+        self.plotter = Plotter("BTC", prediction_days=prediction_days)
         # Plot the predicted and actual values
         self.plotter.actual_vs_prediction(self.get_actual(), self.get_predictions())
         self.plotter.predictions(self.get_predictions())
@@ -136,9 +152,9 @@ class CryptoAnalyst:
         """
         predictions = self.model.predict(self.testing_data)
         predictions = self.model.scaler.inverse_transform(predictions)
-        predictions = pd.DataFrame(predictions, columns=['Prediction'])
-        predictions['Date'] = self.crypto_data['Date'].tail(days)
-        predictions = predictions.set_index('Date')
+        predictions = pd.DataFrame(predictions, columns=["Prediction"])
+        predictions["Date"] = self.crypto_data["Date"].tail(days)
+        predictions = predictions.set_index("Date")
         return predictions
 
     def get_actual(self, days: int = 30) -> pd.DataFrame:
@@ -155,8 +171,8 @@ class CryptoAnalyst:
         pandas.DataFrame
             Dataframe with actual values
         """
-        actual = self.crypto_data['Close'].tail(days)
-        actual = pd.DataFrame(actual, columns=['Actual'])
-        actual['Date'] = self.crypto_data['Date'].tail(days)
-        actual = actual.set_index('Date')
+        actual = self.crypto_data["Close"].tail(days)
+        actual = pd.DataFrame(actual, columns=["Actual"])
+        actual["Date"] = self.crypto_data["Date"].tail(days)
+        actual = actual.set_index("Date")
         return actual
